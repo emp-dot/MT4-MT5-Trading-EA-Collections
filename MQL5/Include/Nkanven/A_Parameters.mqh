@@ -111,8 +111,8 @@ input string Comment_strategy="==========";                          //Entry And
 input string Comment_0="==========";                                 //Risk Management Settings
 input ENUM_RISK_DEFAULT_SIZE RiskDefaultSize=RISK_DEFAULT_AUTO;      //Position Size Mode
 input double DefaultLotSize=1;                                       //Position Size (if fixed or if no stop loss defined)
-input ENUM_RISK_BASE RiskBase=RISK_BASE_BALANCE;                     //Risk Base
-input double MaxRiskPerTrade=0.5;                                    //Percentage To Risk Each Trade
+//input ENUM_RISK_BASE RiskBase=RISK_BASE_BALANCE;                     //Risk Base
+input double RiskPercent=1.0;                                    //Percentage To Risk Each Trade
 input double MinLotSize=0.01;                                        //Minimum Position Size Allowed
 input double MaxLotSize=100;                                         //Maximum Position Size Allowed
 
@@ -120,8 +120,8 @@ input string Comment_1="==========";                                 //Trading H
 input bool UseTradingHours=false;                                    //Limit Trading Hours
 input string TradingHourStart="01";                                  //Trading Start Hour (Broker Server Hour)
 input string TradingHourEnd="23";                                    //Trading End Hour (Broker Server Hour)
-input string TradingStartMin="30";                                   //Trading Start minute (Broker Server Hour)
-input string TradingEndMin="00";                                     //Trading End minute
+input string TradingStartMin="00";                                   //Trading Start minute (Broker Server Hour)
+input string TradingEndMin="59";                                     //Trading End minute
 
 input string Comment_2="==========";                                 //Stop Loss And Take Profit Settings
 input ENUM_MODE_SL StopLossMode=SL_AUTO;                            //Stop Loss Mode
@@ -130,17 +130,25 @@ input int MinStopLoss=0;                                             //Minimum A
 input int MaxStopLoss=5000;                                          //Maximum Allowed Stop Loss In Points
 input bool AtrStopLoss=false;                                        //Set Stop loss based on ATR
 input int atr_sl_factor=3;                                           //Multiplicator for ATR stop loss
+
 input ENUM_MODE_TP TakeProfitMode=TP_AUTO;                          //Take Profit Mode
 input int DefaultTakeProfit=0;                                       //Default Take Profit In Points (0=No Take Profit)
 input int MinTakeProfit=0;                                           //Minimum Allowed Take Profit In Points
 input int MaxTakeProfit=5000;                                        //Maximum Allowed Take Profit In Points
 input double TakeProfitPercent=1.0;                                  //Take Profit percent on risk base
-input double Breakevent=1.0;                                        //Minimum Profit to breakeven
-input bool ProfitRun=true;
+
+
+input bool   UseBreakEven    = true;
+input double BreakevenRR=1.0;                                        //Minimum Profit to breakeven
+input double BreakEvenBuffer = 2.0;    // Extra points beyond BE
 input bool ActiveMartingale=false;
 
+input bool ProfitRun=true;
+input double ProfitRunTargetPercent=10.0;
+
 input string Comment_3="==========";                                 //Trailing Stop Settings
-input bool UseTrailingStop=false;                                    //Use Trailing Stop
+input bool UseTrailingStop=true;                                    //Use Trailing Stop
+input double TrailingRR      = 1.5;    // Trail after 1.5R
 
 input string Comment_4="==========";                                 //Additional Settings
 input int MagicNumber=0;                                             //Magic Number For The Orders Opened By This EA
@@ -148,7 +156,14 @@ input string OrderNote="";                                           //Comment F
 input int Slippage=5;                                                //Slippage in points
 input double MaxSpread=10.0;                                             //Maximum Allowed Spread To Trade In Points
 
-input string Comment_5="===========";                                //Zigzag indicator setting
+
+input string Comment_5="========== TREND FILTER ==========";
+input bool UseTrendFilter = true;
+input int  FastEMA = 50;
+input int  SlowEMA = 200;
+
+
+input string Comment_6="===========";                                //Zigzag indicator setting
 input int Depth=5;
 input int Deviation=5;
 input int Backstep=3;
@@ -157,6 +172,7 @@ input int Sensitivity=2;                                             //Minimum p
 input int LookBack=50;                                               //Maximum peak to consider
 
 input int NumberOfCandles=3;
+
 
 //-GLOBAL VARIABLES-//
 //The variables included in this section are global, hence they can be used in any part of the code
@@ -169,7 +185,7 @@ bool IsNewCandle=false;                   //Indicates if this is a new candle fo
 bool IsSpreadOK=false;                    //Indicates if the spread is low enough to trade
 bool IsOperatingHours=false;              //Indicates if it is possible to trade at the current time (server time)
 bool IsTradedThisBar=false;               //Indicates if an order was already executed in the current candle
-bool In_Trade = true;                    //Indicates if trade range has been formed
+bool In_Trade = false;                    //Indicates if trade range has been formed
 bool CanBuy = true;
 bool CanSell = true;
 bool ClosePosition = false;
@@ -177,9 +193,9 @@ bool FollowProfit = false;
 bool UpTrendingMarket = false;
 bool DownTrendingMarket = false;
 
-double TickValue=0;                       //Value of a tick in account currency at 1 lot
+double TickValue=SymbolInfoDouble(Symb, SYMBOL_TRADE_TICK_VALUE);                      //Value of a tick in account currency at 1 lot
 double LotSize=0;                         //Lot size for the position
-double Tick_Size = SymbolInfoDouble(Symb,SYMBOL_TRADE_TICK_SIZE); //Tick size
+double TickSize = SymbolInfoDouble(Symb,SYMBOL_TRADE_TICK_SIZE); //Tick size
 double High[];
 double Low[];
 double PositionProfit;
@@ -189,7 +205,7 @@ double PositionProfit;
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-long Spread =    SymbolInfoInteger(Symb,SYMBOL_SPREAD) / 100;  //Check the impact. It's originally a double
+long Spread =    SymbolInfoInteger(Symb,SYMBOL_SPREAD);  //Check the impact. It's originally a double
 int OrderOpRetry=10;                      //Number of attempts to retry the order submission
 int TotalOpenOrders=0;                    //Number of total open orders
 int TotalOpenBuy=0;                       //Number of total open buy orders
@@ -199,7 +215,7 @@ double lotMultiplier =1;                        //Adust lot size according to lo
 int candleCounter =0;
 double firstCandleOpen =0;
 double lastCandleClose=0;
-double ProfitRunTargetPercent=10.0;
+
 
 datetime LastBarTraded;
 
