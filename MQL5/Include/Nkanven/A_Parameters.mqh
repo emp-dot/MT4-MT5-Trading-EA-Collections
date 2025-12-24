@@ -111,7 +111,7 @@ input string Comment_strategy="==========";                          //Entry And
 input string Comment_0="==========";                                 //Risk Management Settings
 input ENUM_RISK_DEFAULT_SIZE RiskDefaultSize=RISK_DEFAULT_AUTO;      //Position Size Mode
 input double DefaultLotSize=1;                                       //Position Size (if fixed or if no stop loss defined)
-//input ENUM_RISK_BASE RiskBase=RISK_BASE_BALANCE;                     //Risk Base
+input ENUM_RISK_BASE RiskBase=RISK_BASE_BALANCE;                     //Risk Base
 input double RiskPercent=1.0;                                    //Percentage To Risk Each Trade
 input double MinLotSize=0.01;                                        //Minimum Position Size Allowed
 input double MaxLotSize=100;                                         //Maximum Position Size Allowed
