@@ -929,6 +929,9 @@ void ExecuteEntry()
 //==========================================================
 // TRAIL POSITIONS (Professional Exit Model)
 //==========================================================
+//==========================================================
+// TRAIL POSITIONS (Professional Exit Model + Max Loss)
+//==========================================================
 void TrailPositions()
 {
     if(!PositionSelect(Symbol())) return;
@@ -938,7 +941,24 @@ void TrailPositions()
     double currentSL= PositionGetDouble(POSITION_SL);
     double price    = (type==POSITION_TYPE_BUY) ? last_tick.bid : last_tick.ask;
 
+    // -----------------------------
+    // MAX LOSS CHECK (2% per trade)
+    // -----------------------------
+    double MaxLoss = AccountBalance() * 0.02; // 2% max per trade
+    double currentLoss = (type == POSITION_TYPE_BUY) ?
+                         (openPrice - price) * LotSize * SymbolPointValue() :
+                         (price - openPrice) * LotSize * SymbolPointValue();
+
+    if(currentLoss >= MaxLoss)
+    {
+        ClosePosition();
+        Print("Closed trade due to max loss limit: ", currentLoss);
+        return; // exit function to avoid further trailing
+    }
+
+    // -----------------------------
     // BUY trailing
+    // -----------------------------
     if(type == POSITION_TYPE_BUY)
     {
         double kijunSL = Kijunsen;
@@ -952,7 +972,9 @@ void TrailPositions()
             ClosePosition();
     }
 
+    // -----------------------------
     // SELL trailing
+    // -----------------------------
     if(type == POSITION_TYPE_SELL)
     {
         double kijunSL = Kijunsen;
