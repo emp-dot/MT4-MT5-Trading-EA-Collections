@@ -1,4 +1,4 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                          A_EntriesManagement.mqh |
 //|                        Copyright 2021, Nkondog Anselme Venceslas |
 //|                                             https://www.mql5.com |
@@ -365,4 +365,269 @@ void LotSizeCalculate(double SLPoints)
 
 
 //+------------------------------------------------------------------+
+new files 
 
+// -------------------- GLOBALS --------------------
+static int zzHandleHTF = -1;
+static int zzHandleLTF = -1;
+static double lastHTFSwingHigh = 0;
+static double lastHTFSwingLow  = 0;
+static double lastLTFEntrySwingHigh = 0;
+static double lastLTFEntrySwingLow  = 0;
+
+// ATR settings
+input int ATRPeriod = 14;
+input double ATRMultiplierEntry = 0.5;
+input double ATRMultiplierSL    = 1.0;
+input double ATRMultiplierTP    = 1.5;
+input double ATRMultiplierTrail = 0.5;
+input double ATRMultiplierBE    = 0.2;
+
+// ------------------- UPDATE SWINGS -------------------
+void UpdateHTFSwings()
+{
+    ENUM_TIMEFRAMES HTF = PERIOD_M15;
+    if(zzHandleHTF == -1)
+        zzHandleHTF = iCustom(Symb, HTF, "Examples\\ZigZag", Depth, Deviation, Backstep);
+    if(zzHandleHTF == INVALID_HANDLE) return;
+    double buffer[];
+    ArraySetAsSeries(buffer,true);
+    int copied = CopyBuffer(zzHandleHTF,0,0,50,buffer); // only last 50 bars needed
+    if(copied <= 0) return;
+    double swingHigh=0, swingLow=0;
+    for(int i=0;i<copied;i++)
+    {
+        if(buffer[i]==EMPTY_VALUE) continue;
+        if(buffer[i] > swingHigh) swingHigh = buffer[i];
+        if(buffer[i] < swingLow || swingLow==0) swingLow = buffer[i];
+    }
+    lastHTFSwingHigh = swingHigh;
+    lastHTFSwingLow  = swingLow;
+}
+
+void UpdateLTFEntrySwings()
+{
+    ENUM_TIMEFRAMES LTF = PERIOD_M1;
+    if(zzHandleLTF == -1)
+        zzHandleLTF = iCustom(Symb, LTF, "Examples\\ZigZag", Depth, Deviation, Backstep);
+    if(zzHandleLTF == INVALID_HANDLE) return;
+    double buffer[];
+    ArraySetAsSeries(buffer,true);
+    int copied = CopyBuffer(zzHandleLTF,0,0,50,buffer); // only last 50 bars needed
+    if(copied <= 0) return;
+    double swingHigh=0, swingLow=0;
+    for(int i=0;i<copied;i++)
+    {
+        if(buffer[i]==EMPTY_VALUE) continue;
+        if(buffer[i] > swingHigh) swingHigh = buffer[i];
+        if(buffer[i] < swingLow || swingLow==0) swingLow = buffer[i];
+    }
+    lastLTFEntrySwingHigh = swingHigh;
+    lastLTFEntrySwingLow  = swingLow;
+}
+
+// ------------------- GET ATR -------------------
+double GetATR(int period, ENUM_TIMEFRAMES tf)
+{
+    double atrArray[];
+    if(CopyATR(Symbol(), tf, period, 1, atrArray) <= 0) return 0;
+    return atrArray[0];
+}
+
+// ------------------- EXECUTE ENTRY WITH PENDING CANCEL & AUTO-CLOSE -------------------
+void ExecuteEntry()
+{
+    if(SignalEntry == SIGNAL_ENTRY_NEUTRAL) return;
+
+    // ------------------- Update LTF swings -------------------
+    UpdateLTFEntrySwings();
+
+    double atr = GetATR(ATRPeriod, PERIOD_M1);
+    if(atr == 0) atr = _Point*10; // fallback
+
+    // ------------------- Cancel or close existing pending orders for this symbol -------------------
+    for(int i=OrdersTotal()-1; i>=0; i--)
+    {
+        if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+
+        if(OrderSymbol() == Symbol())
+        {
+            int type = OrderType();
+            if(type == OP_BUYLIMIT || type == OP_BUYSTOP)
+            {
+                double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+                if(OrderOpenPrice() < bid)
+                    OrderDelete(OrderTicket());
+            }
+            else if(type == OP_SELLLIMIT || type == OP_SELLSTOP)
+            {
+                double ask = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
+                if(OrderOpenPrice() > ask)
+                    OrderDelete(OrderTicket());
+            }
+        }
+    }
+
+    // ------------------- Determine entry price, SL, TP -------------------
+    double OpenPrice  = 0;
+    double StopLoss   = 0;
+    double TakeProfit = 0;
+
+    if(SignalEntry == SIGNAL_ENTRY_BUY)
+    {
+        OpenPrice  = lastLTFEntrySwingLow + atr*ATRMultiplierEntry;
+        StopLoss   = lastLTFEntrySwingLow - atr*ATRMultiplierSL;
+        TakeProfit = lastHTFSwingHigh + atr*ATRMultiplierTP;
+    }
+    else if(SignalEntry == SIGNAL_ENTRY_SELL)
+    {
+        OpenPrice  = lastLTFEntrySwingHigh - atr*ATRMultiplierEntry;
+        StopLoss   = lastLTFEntrySwingHigh + atr*ATRMultiplierSL;
+        TakeProfit = lastHTFSwingLow - atr*ATRMultiplierTP;
+    }
+
+    NormalizePrices(OpenPrice, StopLoss, TakeProfit);
+
+    // ------------------- Place pending or market order -------------------
+    if(PendingEnabled)
+    {
+        ENUM_ORDER_TYPE orderType = (SignalEntry==SIGNAL_ENTRY_BUY)? ORDER_TYPE_BUY_LIMIT : ORDER_TYPE_SELL_LIMIT;
+        SendOrder(orderType, Symbol(), OpenPrice, StopLoss, TakeProfit);
+    }
+    else
+    {
+        ENUM_ORDER_TYPE orderType = (SignalEntry==SIGNAL_ENTRY_BUY)? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+        SendOrder(orderType, Symbol(), OpenPrice, StopLoss, TakeProfit);
+    }
+
+    // Reset signal
+    SignalEntry = SIGNAL_ENTRY_NEUTRAL;
+}
+
+// ------------------- MANAGE OPEN TRADES OPTIMIZED -------------------
+void ManageOpenTrades()
+{
+    UpdateHTFSwings();  // TP1 trail
+    UpdateLTFEntrySwings(); // SL and TP2 trail
+
+    double atr = GetATR(ATRPeriod, PERIOD_M1);
+    if(atr == 0) atr = _Point*10; // fallback
+
+    double minTrailDistance = atr*ATRMultiplierTrail;
+    double TP2Activate      = atr*ATRMultiplierTP;
+    double BETriggerAdjusted = atr*ATRMultiplierTP + atr*ATRMultiplierTrail;
+    double BreakEvenBuffer   = atr*ATRMultiplierBE;
+
+    for(int pos=PositionsTotal()-1; pos>=0; pos--)
+    {
+        if(!PositionSelect(Symbol())) continue;
+
+        ENUM_POSITION_TYPE type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+        double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        double sl        = PositionGetDouble(POSITION_SL);
+        double tp        = PositionGetDouble(POSITION_TP);
+        double currentBid = SymbolInfoDouble(Symbol(),SYMBOL_BID);
+        double currentAsk = SymbolInfoDouble(Symbol(),SYMBOL_ASK);
+
+        double profitPoints = (type==POSITION_TYPE_BUY) ? currentBid - openPrice : openPrice - currentAsk;
+
+        // ---------------- Stage 1: Break-even with buffer ----------------
+        if(!TradeBEActivated[0] && profitPoints >= BETriggerAdjusted)
+        {
+            double newSL = (type==POSITION_TYPE_BUY) ? openPrice + BreakEvenBuffer
+                                                     : openPrice - BreakEvenBuffer;
+            newSL = NormalizeDouble(newSL, Digits());
+            if(newSL != sl && PositionModify(Symbol(), newSL, tp))
+                TradeBEActivated[0] = true;
+        }
+
+        // ---------------- Stage 2: Trailing SL ----------------
+        if(TradeBEActivated[0])
+        {
+            double trailSL;
+            if(type==POSITION_TYPE_BUY)
+                trailSL = MathMax(sl, MathMax(lastLTFEntrySwingLow, openPrice + minTrailDistance));
+            else
+                trailSL = MathMin(sl, MathMin(lastLTFEntrySwingHigh, openPrice - minTrailDistance));
+
+            trailSL = NormalizeDouble(trailSL, Digits());
+
+            if((type==POSITION_TYPE_BUY && trailSL>sl) || (type==POSITION_TYPE_SELL && trailSL<sl))
+                PositionModify(Symbol(), trailSL, tp);
+        }
+
+        // ---------------- Stage 3: TP trailing ----------------
+        double newTP = tp;
+        if(type==POSITION_TYPE_BUY)
+        {
+            double tp1 = lastHTFSwingHigh;
+            double tp2 = lastLTFEntrySwingHigh;
+            if(profitPoints >= TP2Activate)
+                newTP = MathMax(tp, MathMax(tp1, tp2));
+            else
+                newTP = MathMax(tp, tp1);
+        }
+        else
+        {
+            double tp1 = lastHTFSwingLow;
+            double tp2 = lastLTFEntrySwingLow;
+            if(profitPoints >= TP2Activate)
+                newTP = MathMin(tp, MathMin(tp1, tp2));
+            else
+                newTP = MathMin(tp, tp1);
+        }
+
+        newTP = NormalizeDouble(newTP, Digits());
+        if(newTP != tp)
+            PositionModify(Symbol(), sl, newTP);
+    }
+}
+
+//========================= NORMALIZE PRICES ========================
+void NormalizePrices(double &Open, double &SL, double &TP)
+{
+    Open = NormalizeDouble(Open, Digits());
+    SL   = NormalizeDouble(SL, Digits());
+    TP   = NormalizeDouble(TP, Digits());
+}
+
+
+//Send Order Function adjusted to handle errors and retry multiple times
+void SendOrder(int Command, string Instrument, double OpenPrice, double SLPrice, double TPPrice, datetime Expiration=0)
+  {
+   MqlTradeRequest request= {};
+   MqlTradeResult  result= {};
+
+//Retry a number of times in case the submission fails
+   for(int i=1; i<=OrderOpRetry; i++)
+     {
+      double SLPoints=0;
+      Print("Stop loss ", SLPrice, " Open price ", OpenPrice);
+      if(SLPrice>0)
+         SLPoints=MathCeil(MathAbs(OpenPrice-SLPrice)/_Point);
+      CheckHistory();
+      Print("Stop loss en point ", SLPoints, " Point ", _Point);
+      LotSizeCalculate(SLPoints);
+      if(LotSize==0)
+         return;
+
+      request.action       =TRADE_ACTION_DEAL;
+      request.symbol       =Instrument;
+      request.volume       =LotSize;
+      request.type         =Command;
+      request.price        =SYMBOL_TRADE_EXECUTION_MARKET;
+      request.sl           =SLPrice;
+      request.tp           =TPPrice;
+      request.type_filling =ORDER_FILLING_FOK;
+      request.deviation    =Slippage;
+      request.expiration   =Expiration;
+
+      if(!OrderSend(request,result))
+         PrintFormat("OrderSend erreur %d",GetLastError());
+      PrintFormat("retcode=%u  transaction=%I64u  ordre=%I64u",result.retcode,result.deal,result.order);
+
+      if(result.retcode == TRADE_RETCODE_DONE && result.deal != 0)
+         break;
+     }
+   return;
+  } 
