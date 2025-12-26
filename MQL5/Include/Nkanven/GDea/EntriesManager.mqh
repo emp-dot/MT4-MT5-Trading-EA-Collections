@@ -271,3 +271,48 @@ void entryConditions()
     }
 }
 
+>>>>>>>><>>>>>>>>>####
+void entryConditions()
+{
+    gSignalEntry = SIGNAL_ENTRY_NEUTRAL;
+
+    // Get zones
+    Zone demandZone = GetDemandZone(PERIOD_H1, 20, 0.5);
+    Zone supplyZone = GetSupplyZone(PERIOD_H1, 20, 0.5);
+
+    double atr = iATR(Symbol(), PERIOD_H1, 14, 0);
+    if(atr <= 0) atr = _Point * 10; // fallback
+
+    // ------------------ BUY PENDING ORDER ------------------
+    double buyEntry  = demandZone.Low + (demandZone.High - demandZone.Low) * 0.25;  // enter near bottom
+    double buySL     = demandZone.Low - atr * 0.5;                                     // SL below zone
+    double buyTP     = buyEntry + atr * 2;                                             // TP based on ATR
+
+    // ------------------ SELL PENDING ORDER ------------------
+    double sellEntry = supplyZone.High - (supplyZone.High - supplyZone.Low) * 0.25;   // enter near top
+    double sellSL    = supplyZone.High + atr * 0.5;                                    // SL above zone
+    double sellTP    = sellEntry - atr * 2;                                            // TP based on ATR
+
+    // Only place one pending order at a time
+    double currentBid = last_tick.bid;
+    double currentAsk = last_tick.ask;
+
+    // Check if buy pending order is far from current price
+    if(currentBid < buyEntry)
+    {
+        gSignalEntry      = SIGNAL_ENTRY_PENDING_BUY;
+        gBuyEntryPrice    = buyEntry;
+        gBuyStopLossPrice = buySL;
+        gTakeProfitPrice  = buyTP;
+        Print("Placing BUY pending order at demand zone");
+    }
+    // Check if sell pending order is far from current price
+    else if(currentAsk > sellEntry)
+    {
+        gSignalEntry       = SIGNAL_ENTRY_PENDING_SELL;
+        gSellEntryPrice    = sellEntry;
+        gSellStopLossPrice = sellSL;
+        gTakeProfitPrice   = sellTP;
+        Print("Placing SELL pending order at supply zone");
+    }
+}
