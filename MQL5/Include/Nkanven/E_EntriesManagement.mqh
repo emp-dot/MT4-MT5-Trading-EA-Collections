@@ -766,3 +766,268 @@ void EvaluateEntry()
         return;
     }
 }
+
+
+
+<<<<<<<<<<<<<<
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2021, Nkondog Anselme Venceslas"
+#property link      "https://www.mql5.com"
+//+------------------------------------------------------------------+
+
+//==========================================================
+// SETTINGS
+//==========================================================
+input bool   UseChoppyFilter = true;
+input double ADX_Threshold   = 20.0;     // Minimum ADX to trade
+input double ATR_Threshold   = 50;       // Minimum ATR in points to trade
+input double atr_sl_factor   = 1.5;      // ATR multiplier for trailing SL
+
+//==========================================================
+// EVALUATE ENTRY
+//==========================================================
+void EvaluateEntry()
+{
+    SignalEntry = SIGNAL_ENTRY_NEUTRAL;
+
+    if(!IsSpreadOK)
+    {
+        Print("Spread too high");
+        return;
+    }
+
+    if(UseTradingHours && !IsOperatingHours)
+        return;
+
+    if(TotalOpenOrders > 0)
+        return;
+
+    TradeManager();
+
+    double closePrice = iClose(Symb, _Period, 1);
+
+    // ---------------------------
+    // CHOPPY MARKET FILTER
+    // ---------------------------
+    if(UseChoppyFilter)
+    {
+        // ADX filter
+        double adx = iADX(Symb, _Period, 14, MODE_MAIN, 1);
+        if(adx < ADX_Threshold)
+        {
+            Print("Market too choppy (ADX=", adx, ")");
+            return;
+        }
+
+        // ATR filter
+        double atrRecent = iATR(Symb, _Period, 14, 1);
+        if(atrRecent < ATR_Threshold)
+        {
+            Print("Market too quiet (ATR=", atrRecent, ")");
+            return;
+        }
+    }
+
+    // ---------------------------
+    // PULLBACK FILTER
+    // ---------------------------
+    double distanceFromKijun = MathAbs(closePrice - Kijunsen);
+    if(distanceFromKijun > Atr * 0.5)
+        return;
+
+    // ================================
+    // BUY CONDITIONS
+    // ================================
+    if(closePrice > Tenkansen
+       && Tenkansen > Kijunsen
+       && closePrice > Senkouspana
+       && closePrice > Senkouspanb
+       && Chinkouspan > BwSenkouspana
+       && Chinkouspan > BwSenkouspanb
+       && Senkouspana > Senkouspanb)
+    {
+        SignalEntry = SIGNAL_ENTRY_BUY;
+        Print("VALID BUY SIGNAL (Pullback Confirmed & Trending)");
+        return;
+    }
+
+    // ================================
+    // SELL CONDITIONS
+    // ================================
+    if(closePrice < Tenkansen
+       && Tenkansen < Kijunsen
+       && closePrice < Senkouspana
+       && closePrice < Senkouspanb
+       && Chinkouspan < BwSenkouspana
+       && Chinkouspan < BwSenkouspanb
+       && Senkouspana < Senkouspanb)
+    {
+        SignalEntry = SIGNAL_ENTRY_SELL;
+        Print("VALID SELL SIGNAL (Pullback Confirmed & Trending)");
+        return;
+    }
+}
+
+//==========================================================
+// EXECUTE ENTRY
+//==========================================================
+void ExecuteEntry()
+{
+    if(SignalEntry == SIGNAL_ENTRY_NEUTRAL)
+        return;
+
+    int    Operation;
+    double OpenPrice      = 0;
+    double StopLossPrice  = 0;
+    double TakeProfitPrice= 0; // Always 0, no fixed TP
+
+    // ================================
+    // BUY
+    // ================================
+    if(SignalEntry == SIGNAL_ENTRY_BUY)
+    {
+        Operation = ORDER_TYPE_BUY;
+        OpenPrice = last_tick.ask;
+
+        // Initial SL below Kijun / Cloud
+        StopLossPrice = MathMin(Kijunsen, Senkouspanb);
+
+        // Take profit = 0 → profit will run
+        TakeProfitPrice = 0;
+
+        // Normalize
+        OpenPrice       = NormalizeDouble(OpenPrice, Digits());
+        StopLossPrice   = NormalizeDouble(StopLossPrice, Digits());
+        TakeProfitPrice = NormalizeDouble(TakeProfitPrice, Digits());
+
+        SendOrder(Operation, Symbol(), OpenPrice, StopLossPrice, TakeProfitPrice);
+    }
+
+    // ================================
+    // SELL
+    // ================================
+    if(SignalEntry == SIGNAL_ENTRY_SELL)
+    {
+        Operation = ORDER_TYPE_SELL;
+        OpenPrice = last_tick.bid;
+
+        // Initial SL above Kijun / Cloud
+        StopLossPrice = MathMax(Kijunsen, Senkouspanb);
+
+        // Take profit = 0 → profit will run
+        TakeProfitPrice = 0;
+
+        // Normalize
+        OpenPrice       = NormalizeDouble(OpenPrice, Digits());
+        StopLossPrice   = NormalizeDouble(StopLossPrice, Digits());
+        TakeProfitPrice = NormalizeDouble(TakeProfitPrice, Digits());
+
+        SendOrder(Operation, Symbol(), OpenPrice, StopLossPrice, TakeProfitPrice);
+    }
+}
+
+//==========================================================
+// TRAIL POSITIONS (Professional Exit Model)
+//==========================================================
+void TrailPositions()
+{
+    if(!PositionSelect(Symbol())) return;
+
+    int type        = PositionGetInteger(POSITION_TYPE);
+    double openPrice= PositionGetDouble(POSITION_PRICE_OPEN);
+    double currentSL= PositionGetDouble(POSITION_SL);
+    double price    = (type==POSITION_TYPE_BUY) ? last_tick.bid : last_tick.ask;
+
+    // BUY trailing
+    if(type == POSITION_TYPE_BUY)
+    {
+        double kijunSL = Kijunsen;
+        double atrSL   = price - (Atr * atr_sl_factor);
+        double newSL   = MathMax(kijunSL, atrSL);
+
+        if(newSL > currentSL && newSL > openPrice)
+            ModifySL(newSL);
+
+        if(price < Kijunsen) // exit when Kijun breaks
+            ClosePosition();
+    }
+
+    // SELL trailing
+    if(type == POSITION_TYPE_SELL)
+    {
+        double kijunSL = Kijunsen;
+        double atrSL   = price + (Atr * atr_sl_factor);
+        double newSL   = MathMin(kijunSL, atrSL);
+
+        if(newSL < currentSL && newSL < openPrice)
+            ModifySL(newSL);
+
+        if(price > Kijunsen) // exit when Kijun breaks
+            ClosePosition();
+    }
+}
+
+//==========================================================
+// SEND ORDER
+//==========================================================
+void SendOrder(int Command, string Instrument, double OpenPrice, double SLPrice, double TPPrice, datetime Expiration=0)
+{
+    MqlTradeRequest request = {};
+    MqlTradeResult  result  = {};
+
+    for(int i=1; i<=OrderOpRetry; i++)
+    {
+        double SLPoints = 0;
+        if(SLPrice > 0)
+            SLPoints = MathCeil(MathAbs(OpenPrice - SLPrice) / Point());
+
+        CheckHistory();
+        LotSizeCalculate(SLPoints);
+
+        if(LotSize == 0)
+            return;
+
+        request.action       = TRADE_ACTION_DEAL;
+        request.symbol       = Instrument;
+        request.volume       = LotSize;
+        request.type         = Command;
+        request.price        = SYMBOL_TRADE_EXECUTION_MARKET;
+        request.sl           = NormalizeDouble(SLPrice, Digits());
+        request.tp           = NormalizeDouble(TPPrice, Digits());
+        request.type_filling = ORDER_FILLING_FOK;
+        request.deviation    = Slippage;
+        request.expiration   = Expiration;
+
+        if(!OrderSend(request, result))
+            PrintFormat("OrderSend error %d", GetLastError());
+
+        if(result.retcode == TRADE_RETCODE_DONE && result.deal != 0)
+        {
+            FollowProfit   = false;
+            PositionProfit = 0;
+            break;
+        }
+    }
+}
+
+//==========================================================
+// CLOSE POSITION (utility)
+//==========================================================
+void ClosePosition()
+{
+    ulong ticket = PositionGetInteger(POSITION_TICKET);
+    if(ticket == 0) return;
+    MqlTradeRequest req = {};
+    MqlTradeResult  res = {};
+
+    req.action = TRADE_ACTION_DEAL;
+    req.symbol = Symbol();
+    req.position = ticket;
+    req.volume = PositionGetDouble(POSITION_VOLUME);
+    req.type = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+    req.price = (req.type == ORDER_TYPE_BUY) ? last_tick.ask : last_tick.bid;
+    req.deviation = Slippage;
+    req.type_filling = ORDER_FILLING_FOK;
+
+    OrderSend(req, res);
+}
